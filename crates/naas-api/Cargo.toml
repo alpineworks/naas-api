@@ -1,0 +1,33 @@
+[package]
+name = "naas-api"
+description = "Noise as a Service: HTTP API for the Infinite Noise tRNG"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+axum = { version = "0.8", features = ["macros", "http2"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "net"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+bytes = "1"
+async-channel = "2"
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", default-features = false }
+hex = "0.4"
+base64 = "0.22"
+thiserror = "2"
+anyhow = "1"
+futures = "0.3"
+infnoise-core = { git = "https://github.com/alpineworks/infnoise-rs", tag = "v0.1.0" }
+infnoise-ftdi = { git = "https://github.com/alpineworks/infnoise-rs", tag = "v0.1.0" }
