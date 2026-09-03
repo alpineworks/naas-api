@@ -50,6 +50,7 @@ async fn run(cfg: Config) -> Result<()> {
         multiplier = cfg.multiplier,
         pool_bytes = cfg.pool_bytes,
         max_request_bytes = cfg.max_request_bytes,
+        max_sample_micros = cfg.max_sample_micros,
         serial_count = cfg.serial_allowlist.len(),
         "starting naas-api",
     );
@@ -61,7 +62,7 @@ async fn run(cfg: Config) -> Result<()> {
     let reader_handles =
         reader::spawn_all(&cfg, &pool.sender(), &shutdown).context("spawning reader threads")?;
 
-    let api_router = handlers::router(pool.clone(), cfg.max_request_bytes);
+    let api_router = handlers::router(pool.clone(), &cfg);
     let ops_router = ops::router(pool.clone(), metrics_handle);
 
     let api_listener = tokio::net::TcpListener::bind(cfg.api_addr)
