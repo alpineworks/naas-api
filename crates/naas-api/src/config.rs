@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use clap::Parser;
 
@@ -30,6 +31,12 @@ pub struct Config {
     #[arg(long, env = "NAAS_MAX_REQUEST_BYTES", default_value_t = 1_048_576)]
     pub max_request_bytes: usize,
 
+    /// Discard any USB sample whose write+read round trip took longer than
+    /// this. Long clock stalls let the INM's analog loop settle, which
+    /// reduces entropy. Mirrors `MAX_MICROSEC_FOR_SAMPLES` in the C driver.
+    #[arg(long, env = "NAAS_MAX_SAMPLE_MICROS", default_value_t = 5_000)]
+    pub max_sample_micros: u64,
+
     #[arg(long, env = "NAAS_SERIAL_ALLOWLIST", value_delimiter = ',')]
     pub serial_allowlist: Vec<String>,
 
@@ -41,6 +48,10 @@ impl Config {
     pub fn pool_chunks(&self) -> usize {
         const MAX_CHUNK_BYTES: usize = 128;
         (self.pool_bytes / MAX_CHUNK_BYTES).max(64)
+    }
+
+    pub fn max_sample_duration(&self) -> Duration {
+        Duration::from_micros(self.max_sample_micros)
     }
 
     pub fn process_mode(&self) -> infnoise_core::ProcessMode {

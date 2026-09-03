@@ -67,7 +67,9 @@ USB latency: ~16 ms per 512-byte buffer at the configured baud. Producer-side qu
 **One reader thread per USB device.** Sync I/O (libftdi has no real async story we want to bother with). Each reader runs the same loop the `infnoise` binary does:
 
 ```rust
+let start = Instant::now();
 device.read_buffer(&mut in_buf)?;
+if start.elapsed() > max_sample { continue; } // MAX_MICROSEC_FOR_SAMPLES guard from the C
 let entropy = extract_bytes(&mut bytes, &in_buf, &mut hc)?;
 if hc.ok_to_use_data() && hc.entropy_on_target(entropy, BUFLEN) {
     let entropy_clamped = clamp_entropy(entropy, hc.expected_entropy_per_bit());
@@ -92,6 +94,7 @@ if hc.ok_to_use_data() && hc.entropy_on_target(entropy, BUFLEN) {
 
 | Method | Path | Behavior |
 |---|---|---|
+| `GET` | `/` | Plain HTML usage page with the live limits baked in. |
 | `GET` | `/api/v1/random/<n>` | Return exactly `n` bytes as `application/octet-stream`. 400 if `n` > 1 MiB. |
 | `GET` | `/api/v1/random/stream` | `Transfer-Encoding: chunked` octet-stream. Streams from the pool until the client disconnects. For sustained consumers. |
 | `GET` | `/api/v1/random/hex/<n>` | Same bytes, hex-encoded `text/plain; charset=us-ascii`. 1 MiB cap on the underlying byte count. |
@@ -117,6 +120,7 @@ All settings via env vars with matching CLI flags (clap derive + `env` feature).
 | `NAAS_MULTIPLIER` | `--multiplier` | `100` | INM whitener multiplier. Supported: 1, 10, 100, 1000. |
 | `NAAS_POOL_BYTES` | `--pool-bytes` | `1048576` | Bounded pool capacity. |
 | `NAAS_MAX_REQUEST_BYTES` | `--max-request-bytes` | `1048576` | Per-request cap on the bounded `random` endpoints. |
+| `NAAS_MAX_SAMPLE_MICROS` | `--max-sample-micros` | `5000` | Discard a USB sample if its write+read round trip took longer than this. Mirrors `MAX_MICROSEC_FOR_SAMPLES` in the C driver. Rejections count in `naas_timing_rejections_total`. |
 | `NAAS_SERIAL_ALLOWLIST` | `--serial-allowlist` | *(unset)* | Comma-separated FTDI serials. Unset = scan and use all detected devices. |
 | `NAAS_LOG_LEVEL` | `--log-level` | `info` | `tracing` env-filter syntax (e.g. `info,naas_api=debug`). |
 

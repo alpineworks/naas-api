@@ -1,5 +1,5 @@
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use metrics::Counter;
@@ -47,6 +47,7 @@ pub fn spawn_all(
     };
 
     let mode = cfg.process_mode();
+    let max_sample = cfg.max_sample_duration();
     let mut handles = Vec::with_capacity(serials.len());
 
     for serial in serials {
@@ -56,7 +57,14 @@ pub fn spawn_all(
         let h = thread::Builder::new()
             .name(format!("infnoise:{label}"))
             .spawn(move || {
-                supervise(serial.as_deref(), &label, mode, &sender, &shutdown);
+                supervise(
+                    serial.as_deref(),
+                    &label,
+                    mode,
+                    max_sample,
+                    &sender,
+                    &shutdown,
+                );
             })?;
         handles.push(h);
     }
@@ -66,6 +74,7 @@ pub fn spawn_all(
 struct DeviceMetrics {
     entropy_bytes: Counter,
     health_rejections: Counter,
+    timing_rejections: Counter,
     reader_errors: Counter,
 }
 
@@ -75,6 +84,7 @@ impl DeviceMetrics {
         Self {
             entropy_bytes: metrics::counter!("naas_entropy_bytes_total", "device" => device.clone()),
             health_rejections: metrics::counter!("naas_health_rejections_total", "device" => device.clone()),
+            timing_rejections: metrics::counter!("naas_timing_rejections_total", "device" => device.clone()),
             reader_errors: metrics::counter!("naas_reader_errors_total", "device" => device),
         }
     }
@@ -84,12 +94,13 @@ fn supervise(
     serial: Option<&str>,
     label: &str,
     mode: ProcessMode,
+    max_sample: Duration,
     sender: &PoolSender,
     shutdown: &CancellationToken,
 ) {
     let m = DeviceMetrics::new(label);
     while !shutdown.is_cancelled() && !sender.is_closed() {
-        match read_loop(serial, label, mode, sender, shutdown, &m) {
+        match read_loop(serial, label, mode, max_sample, sender, shutdown, &m) {
             Ok(()) => break,
             Err(e) => {
                 m.reader_errors.increment(1);
@@ -108,6 +119,7 @@ fn read_loop(
     serial: Option<&str>,
     label: &str,
     mode: ProcessMode,
+    max_sample: Duration,
     sender: &PoolSender,
     shutdown: &CancellationToken,
     m: &DeviceMetrics,
@@ -126,12 +138,14 @@ fn read_loop(
         if shutdown.is_cancelled() {
             return Ok(());
         }
-        device.read_buffer(&mut in_buf)?;
-        let _ = extract_bytes(&mut bytes, &in_buf, &mut hc)?;
         warmup_rounds += 1;
         if warmup_rounds > WARMUP_LIMIT {
             return Err(ReaderError::WarmupTimeout(WARMUP_LIMIT));
         }
+        if !timed_read(&mut device, &mut in_buf, max_sample, m)? {
+            continue;
+        }
+        let _ = extract_bytes(&mut bytes, &in_buf, &mut hc)?;
     }
     tracing::info!(device = %label, warmup_rounds, "device warmed up");
 
@@ -144,7 +158,9 @@ fn read_loop(
             continue;
         }
 
-        device.read_buffer(&mut in_buf)?;
+        if !timed_read(&mut device, &mut in_buf, max_sample, m)? {
+            continue;
+        }
         let entropy = extract_bytes(&mut bytes, &in_buf, &mut hc)?;
         if !hc.ok_to_use_data() || !hc.entropy_on_target(entropy, BUFLEN as u32) {
             m.health_rejections.increment(1);
@@ -157,6 +173,29 @@ fn read_loop(
         }
     }
     Ok(())
+}
+
+/// Drive one INM clock cycle and time the USB round trip. Returns `Ok(false)`
+/// when the sample took longer than `max_sample` and must be discarded.
+///
+/// This is the `MAX_MICROSEC_FOR_SAMPLES` guard from the C reference's
+/// `readData`: a stalled bit-bang clock lets the INM's analog loop settle, so
+/// bits sampled after a long stall carry less entropy than the health checker
+/// assumes. The health checker is a statistical estimate; this guard is the
+/// independent, per-sample defense.
+fn timed_read(
+    device: &mut Device,
+    in_buf: &mut [u8; BUFLEN],
+    max_sample: Duration,
+    m: &DeviceMetrics,
+) -> Result<bool, ReaderError> {
+    let start = Instant::now();
+    device.read_buffer(in_buf)?;
+    if start.elapsed() > max_sample {
+        m.timing_rejections.increment(1);
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 fn push(sender: &PoolSender, data: &[u8], entropy_counter: &Counter) -> bool {
